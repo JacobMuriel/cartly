@@ -36,7 +36,12 @@ export default function PantryScreen({ pantry, setPantry }) {
   function showToast(msg) {
     clearTimeout(toastTimerRef.current)
     setToast(msg)
-    toastTimerRef.current = setTimeout(() => setToast(null), 4000)
+    toastTimerRef.current = setTimeout(() => setToast(null), 20000)
+  }
+
+  function dismissToast() {
+    clearTimeout(toastTimerRef.current)
+    setToast(null)
   }
 
   async function applyVoiceUpdates(transcript) {
@@ -192,10 +197,19 @@ export default function PantryScreen({ pantry, setPantry }) {
       {toast && (
         <div className="mx-4 mb-1">
           <div
-            className="rounded-[12px] px-4 py-3 text-xs font-medium leading-relaxed"
-            style={{ backgroundColor: '#2C2A24', color: '#FFFFFF' }}
+            className="rounded-[12px] px-4 py-3 flex items-center justify-between gap-3"
+            style={{ backgroundColor: '#2C2A24' }}
           >
-            {toast}
+            <p className="text-xs font-medium leading-relaxed" style={{ color: '#FFFFFF' }}>
+              {toast}
+            </p>
+            <button
+              onClick={dismissToast}
+              className="shrink-0 rounded-full px-3 py-1 text-[11px] font-semibold"
+              style={{ backgroundColor: '#5C6E2E', color: '#FFFFFF' }}
+            >
+              Approve
+            </button>
           </div>
         </div>
       )}
