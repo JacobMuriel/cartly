@@ -1,6 +1,6 @@
 // Relative URL — Vite proxies /api/* to the Express server.
 // This works both from desktop browser and from a phone on the same WiFi.
-const PROXY_BASE = '/api'
+const PROXY_BASE = import.meta.env.VITE_API_BASE ?? '/api'
 
 async function apiFetch(path) {
   const res = await fetch(`${PROXY_BASE}${path}`)
