@@ -164,7 +164,7 @@ export default function PantryScreen({ pantry, setPantry }) {
               className="tracking-tight leading-tight"
               style={{ color: '#2C2A24', fontSize: '1.625rem', fontWeight: 600 }}
             >
-              Cartly
+              Pantry
             </h1>
             <p className="text-xs mt-0.5" style={{ color: '#A09880' }}>
               Your kitchen, organized
