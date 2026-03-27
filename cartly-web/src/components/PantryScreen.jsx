@@ -1,45 +1,6 @@
-const PANTRY = [
-  {
-    category: 'Pantry Staples',
-    items: [
-      { name: 'Barilla Penne Pasta', amount: 'About ½ box left', status: 'stocked' },
-      { name: "Rao's Marinara Sauce", amount: 'About ¼ jar left', status: 'use-soon' },
-      { name: 'Olive Oil', amount: 'About ¼ bottle left', status: 'use-soon' },
-      { name: 'Garlic Powder', amount: 'Well stocked', status: 'stocked' },
-      { name: 'Onion Powder', amount: 'Well stocked', status: 'stocked' },
-      { name: 'Smoked Paprika', amount: 'Running low', status: 'low' },
-      { name: 'Red Pepper Flakes', amount: 'Well stocked', status: 'stocked' },
-      { name: 'Kosher Salt', amount: 'Well stocked', status: 'stocked' },
-      { name: 'Black Pepper', amount: 'Running low', status: 'low' },
-      { name: 'Chicken Broth', amount: '1 full carton', status: 'stocked' },
-      { name: 'Canned Chickpeas', amount: '2 cans', status: 'stocked' },
-      { name: 'Jasmine Rice', amount: 'About ⅓ bag left', status: 'low' },
-    ],
-  },
-  {
-    category: 'Produce',
-    items: [
-      { name: 'Baby Spinach', amount: 'Small amount left', status: 'use-soon' },
-      { name: 'Cherry Tomatoes', amount: 'Handful left', status: 'use-soon' },
-      { name: 'Yellow Onion', amount: '1 left', status: 'low' },
-      { name: 'Russet Potatoes', amount: '3 left', status: 'stocked' },
-    ],
-  },
-  {
-    category: 'Dairy & Eggs',
-    items: [
-      { name: 'Eggs', amount: '4 left', status: 'low' },
-      { name: 'Parmesan Cheese', amount: 'Small amount left', status: 'use-soon' },
-      { name: 'Greek Yogurt', amount: '1 container', status: 'use-soon' },
-    ],
-  },
-  {
-    category: 'Frozen',
-    items: [
-      { name: 'Frozen Broccoli', amount: 'About half a bag', status: 'stocked' },
-    ],
-  },
-]
+import { useState, useRef } from 'react'
+import { Mic, Loader2 } from 'lucide-react'
+import { callOpenAI, transcribeAudio } from '../services/openaiApi'
 
 const STATUS_CONFIG = {
   'use-soon': { label: 'Use soon', bg: '#FEF3C7', color: '#92400E' },
@@ -59,29 +20,178 @@ function StatusPill({ status }) {
   )
 }
 
-export default function PantryScreen() {
-  // Count items that need attention (use-soon or low)
-  const needsAttention = PANTRY.flatMap(g => g.items).filter(
+// pantry and setPantry come from App so PlanScreen can share the same state.
+export default function PantryScreen({ pantry, setPantry }) {
+  const [isRecording, setIsRecording] = useState(false)
+  const [isProcessing, setIsProcessing] = useState(false)
+  const [toast, setToast] = useState(null)
+  const mediaRecorderRef = useRef(null)
+  const audioChunksRef = useRef([])
+  const toastTimerRef = useRef(null)
+
+  const needsAttention = pantry.flatMap(g => g.items).filter(
     i => i.status === 'use-soon' || i.status === 'low'
   ).length
 
+  function showToast(msg) {
+    clearTimeout(toastTimerRef.current)
+    setToast(msg)
+    toastTimerRef.current = setTimeout(() => setToast(null), 4000)
+  }
+
+  async function applyVoiceUpdates(transcript) {
+    // isProcessing is already true when called from recorder.onstop
+    const itemNames = pantry.flatMap(g => g.items.map(i => i.name))
+    const systemPrompt =
+      `You are a pantry tracking assistant. The user will describe what they just used or added to their pantry. ` +
+      `Parse their statement and return a JSON array of updates:\n` +
+      `[{ "itemName": string, "action": "decrease" | "increase" | "remove", "newAmount": string }]\n` +
+      `Match item names to these exact pantry items: ${itemNames.join(', ')}.\n` +
+      `Only return valid JSON.`
+    try {
+      const raw = await callOpenAI(
+        [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: transcript },
+        ],
+        0.3
+      )
+      const updates = JSON.parse(raw)
+      const updatedNames = []
+
+      setPantry(prev =>
+        prev.map(group => ({
+          ...group,
+          items: group.items.map(item => {
+            const update = updates.find(u => u.itemName === item.name)
+            if (!update) return item
+            updatedNames.push(`${item.name} → ${update.newAmount}`)
+            if (update.action === 'remove') {
+              return { ...item, amount: 'Out of stock', status: 'low' }
+            }
+            const newStatus = update.action === 'decrease' ? 'use-soon' : 'stocked'
+            return { ...item, amount: update.newAmount, status: newStatus }
+          }),
+        }))
+      )
+
+      showToast(
+        updatedNames.length > 0
+          ? `Updated: ${updatedNames.join(', ')}`
+          : 'No matching pantry items found'
+      )
+    } catch (err) {
+      showToast(`Couldn't update pantry: ${err.message}`)
+    } finally {
+      setIsProcessing(false)
+    }
+  }
+
+  async function startRecording() {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      showToast('Microphone access not supported in this browser')
+      return
+    }
+
+    let stream
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+    } catch {
+      showToast('Microphone permission denied — please allow access and try again')
+      return
+    }
+
+    audioChunksRef.current = []
+    const recorder = new MediaRecorder(stream)
+    mediaRecorderRef.current = recorder
+
+    recorder.ondataavailable = e => {
+      if (e.data.size > 0) audioChunksRef.current.push(e.data)
+    }
+
+    recorder.onstop = async () => {
+      // Stop all mic tracks so the browser releases the mic indicator
+      stream.getTracks().forEach(t => t.stop())
+      setIsRecording(false)
+      setIsProcessing(true)
+      try {
+        const blob = new Blob(audioChunksRef.current, { type: recorder.mimeType || 'audio/webm' })
+        const transcript = await transcribeAudio(blob)
+        if (!transcript) {
+          showToast("Couldn't hear anything — try again")
+          setIsProcessing(false)
+          return
+        }
+        // applyVoiceUpdates manages isProcessing from here
+        applyVoiceUpdates(transcript)
+      } catch (err) {
+        showToast(`Voice error: ${err.message}`)
+        setIsProcessing(false)
+      }
+    }
+
+    recorder.start()
+    setIsRecording(true)
+  }
+
+  function stopRecording() {
+    mediaRecorderRef.current?.stop()
+    // isRecording flipped to false inside recorder.onstop
+  }
+
   return (
     <div className="flex flex-col h-full">
-      {/* Minimal header — no green bar */}
+      {/* Header */}
       <div className="px-4 pt-12 pb-4" style={{ backgroundColor: '#FAFAF8' }}>
-        <h1
-          className="tracking-tight leading-tight"
-          style={{ color: '#2C2A24', fontSize: '1.625rem', fontWeight: 600 }}
-        >
-          Cartly
-        </h1>
-        <p className="text-xs mt-0.5" style={{ color: '#A09880' }}>
-          Your kitchen, organized
-        </p>
+        <div className="flex items-start justify-between">
+          <div>
+            <h1
+              className="tracking-tight leading-tight"
+              style={{ color: '#2C2A24', fontSize: '1.625rem', fontWeight: 600 }}
+            >
+              Cartly
+            </h1>
+            <p className="text-xs mt-0.5" style={{ color: '#A09880' }}>
+              Your kitchen, organized
+            </p>
+          </div>
+
+          {/* Mic button — idle: olive green, recording: pulsing red, processing: spinner */}
+          <button
+            onClick={isRecording ? stopRecording : startRecording}
+            disabled={isProcessing}
+            aria-label={isRecording ? 'Stop recording' : 'Update pantry by voice'}
+            className={`rounded-full flex items-center justify-center mt-1 shrink-0 ${isRecording ? 'animate-pulse' : ''}`}
+            style={{
+              width: 40,
+              height: 40,
+              backgroundColor: isRecording ? '#EF4444' : '#F0F3E8',
+              transition: 'background-color 0.2s',
+            }}
+          >
+            {isProcessing ? (
+              <Loader2 size={18} className="animate-spin" style={{ color: '#5C6E2E' }} />
+            ) : (
+              <Mic size={18} style={{ color: isRecording ? '#FFFFFF' : '#5C6E2E' }} />
+            )}
+          </button>
+        </div>
       </div>
 
+      {/* Toast notification */}
+      {toast && (
+        <div className="mx-4 mb-1">
+          <div
+            className="rounded-[12px] px-4 py-3 text-xs font-medium leading-relaxed"
+            style={{ backgroundColor: '#2C2A24', color: '#FFFFFF' }}
+          >
+            {toast}
+          </div>
+        </div>
+      )}
+
       <div
-        className="flex-1 overflow-y-auto pb-24 px-4"
+        className="flex-1 overflow-y-auto pb-24 px-4 pt-3"
         style={{ backgroundColor: '#FAFAF8' }}
       >
         {/* Summary chip */}
@@ -98,7 +208,7 @@ export default function PantryScreen() {
         )}
 
         {/* Category sections */}
-        {PANTRY.map(({ category, items }) => (
+        {pantry.map(({ category, items }) => (
           <div key={category} className="mb-6">
             <p
               className="text-[10px] font-semibold uppercase tracking-[0.1em] px-1 mb-2"
