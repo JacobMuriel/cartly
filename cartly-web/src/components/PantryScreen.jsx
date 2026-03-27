@@ -41,22 +41,32 @@ export default function PantryScreen({ pantry, setPantry }) {
 
   async function applyVoiceUpdates(transcript) {
     // isProcessing is already true when called from recorder.onstop
-    const itemNames = pantry.flatMap(g => g.items.map(i => i.name))
+    const pantryItems = pantry.flatMap(g => g.items.map(i => ({ name: i.name, amount: i.amount })))
+    const itemList = pantryItems.map(i => `"${i.name}" (currently: ${i.amount})`).join(', ')
+
     const systemPrompt =
-      `You are a pantry tracking assistant. The user will describe what they just used or added to their pantry. ` +
-      `Parse their statement and return a JSON array of updates:\n` +
-      `[{ "itemName": string, "action": "decrease" | "increase" | "remove", "newAmount": string }]\n` +
-      `Match item names to these exact pantry items: ${itemNames.join(', ')}.\n` +
-      `Only return valid JSON.`
+      `You are a pantry tracking assistant. The user describes what they just CONSUMED, USED UP, or ADDED.\n\n` +
+      `CRITICAL rules:\n` +
+      `- Words like "used", "ate", "cooked with", "finished", "ran out of", "used up" mean the quantity DECREASED.\n` +
+      `- Words like "bought", "got", "picked up", "added", "restocked" mean the quantity INCREASED.\n` +
+      `- "action" must be "decrease" when the user consumed/used something, "increase" when they added something, "remove" when completely gone.\n` +
+      `- "newAmount" must reflect the remaining quantity AFTER the change (e.g. if they had "4 left" and used 2, newAmount is "2 left").\n\n` +
+      `Current pantry items: ${itemList}.\n\n` +
+      `Return ONLY a raw JSON array, no markdown, no code fences:\n` +
+      `[{ "itemName": "exact name from list", "action": "decrease" | "increase" | "remove", "newAmount": "string" }]`
+
     try {
       const raw = await callOpenAI(
         [
           { role: 'system', content: systemPrompt },
           { role: 'user', content: transcript },
         ],
-        0.3
+        0.1  // very low temperature — this is a deterministic parsing task
       )
-      const updates = JSON.parse(raw)
+
+      // Strip markdown code fences if GPT wraps the response anyway
+      const cleaned = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim()
+      const updates = JSON.parse(cleaned)
       const updatedNames = []
 
       setPantry(prev =>
