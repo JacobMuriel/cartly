@@ -1,0 +1,32 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Prevent iOS rubber-band scroll on the page body */
+html, body {
+  overscroll-behavior: none;
+  overflow: hidden;
+  height: 100%;
+  height: 100dvh;
+}
+
+body {
+  background-color: #E8E4DC;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  /* Remove tap highlight flicker on mobile */
+  -webkit-tap-highlight-color: transparent;
+}
+
+#root {
+  width: 100%;
+  /* On a real phone: fills the screen. On desktop: capped at phone width. */
+  max-width: 390px;
+  height: 100dvh;
+  background: #FAFAF8;
+  position: relative;
+  overflow: hidden;
+  /* Phone-frame shadow visible on desktop */
+  box-shadow: 0 0 60px rgba(0,0,0,0.18);
+}
